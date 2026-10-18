@@ -9,7 +9,7 @@ interface ChatRewindFlowOptions {
   rewind: (beforeT: number) => Promise<unknown>;
   clearQueuedPrompts: () => void;
   restorePrompt: (text: string) => void;
-  refreshMeta: () => Promise<void>;
+  refreshMeta: (throwOnError?: boolean) => Promise<void>;
   onComplete: () => void;
 }
 
@@ -53,7 +53,7 @@ export async function runChatRewind({
   clearQueuedPrompts();
   restorePrompt(promptText);
   try {
-    await refreshMeta();
+    await refreshMeta(true);
   } catch (error) {
     const message = error instanceof Error && error.message.trim()
       ? error.message

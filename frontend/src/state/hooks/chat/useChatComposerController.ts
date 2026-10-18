@@ -33,7 +33,7 @@ export function useChatComposerController({
   sendPrompt: (text: string, clientId?: string) => boolean;
   promptOutcome: PromptOutcome | null;
   rewind: (beforeT: number) => Promise<unknown>;
-  refreshMeta: () => Promise<void>;
+  refreshMeta: (throwOnError?: boolean) => Promise<void>;
   attachmentBasePath: string;
   /**
    * Carried through to the upload hook so an extension can tell which

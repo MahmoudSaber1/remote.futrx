@@ -110,3 +110,16 @@ test("refresh failures with no error message still give the user a recovery hint
   await runChatRewind(options);
   assert.match(String(dialogs[1].message), /Reload the chat/);
 });
+
+test("rewind opts into metadata errors so the live hook can report refresh failures", async () => {
+  const { dialogs, options } = setup();
+  let throwOnErrorRequested = false;
+  options.refreshMeta = async (throwOnError = false) => {
+    throwOnErrorRequested = throwOnError;
+    if (throwOnError) throw new Error("metadata unavailable");
+  };
+  await runChatRewind(options);
+  assert.equal(throwOnErrorRequested, true);
+  assert.equal(dialogs[1].title, "Chat refresh failed");
+  assert.equal(dialogs[1].message, "metadata unavailable");
+});
