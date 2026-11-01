@@ -1,5 +1,5 @@
 import { useStore } from "zustand";
-import { useCallback, useEffect, useRef } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { ChatStatus, PromptOutcome } from "../../../models/chat";
 import { useConfirm } from "../../context/ConfirmContext";
 import { chatAttachmentService } from "../../../services/chat/chatAttachmentService.ts";
@@ -21,6 +21,7 @@ export function useChatComposerController({
   sendPrompt,
   promptOutcome,
   rewind,
+  stopActiveRun,
   refreshMeta,
   attachmentBasePath,
   projectId,
@@ -32,7 +33,8 @@ export function useChatComposerController({
   canSendPrompt: boolean;
   sendPrompt: (text: string, clientId?: string) => boolean;
   promptOutcome: PromptOutcome | null;
-  rewind: (beforeT: number) => Promise<unknown>;
+  rewind: (rewindBeforeTimestamp: number) => Promise<unknown>;
+  stopActiveRun: () => Promise<void>;
   refreshMeta: (throwOnError?: boolean) => Promise<void>;
   attachmentBasePath: string;
   /**
@@ -42,6 +44,8 @@ export function useChatComposerController({
   projectId?: string;
 }) {
   const confirm = useConfirm();
+  const [rewindPending, setRewindPending] = useState(false);
+  const rewindPendingRef = useRef(false);
   // ChatContainer remounts on chat switch (it is keyed by chatId), so selecting
   // the active draft from the session store is what makes a half-typed message
   // survive leaving and returning to a chat.
@@ -67,6 +71,7 @@ export function useChatComposerController({
     chatId,
     status,
     canSendPrompt,
+    suspended: rewindPending,
     sendPrompt,
     promptOutcome,
     onSent: scroll.unlockAutoScroll,
@@ -76,24 +81,35 @@ export function useChatComposerController({
     scroll.unlockAutoScroll();
   }, [chatId]);
 
-  async function handleRewind(t: number, promptText: string) {
-    await runChatRewind({
-      status,
-      beforeT: t,
-      promptText,
-      confirm,
-      rewind,
-      clearQueuedPrompts: queue.clearQueuedPrompts,
-      restorePrompt: setText,
-      refreshMeta,
-      onComplete: () => {
-        scroll.unlockAutoScroll();
-        setTimeout(() => {
-          scroll.jumpToBottom();
-          focusInput();
-        }, 0);
-      },
-    });
+  async function handleRewind(rewindBeforeTimestamp: number, promptText: string) {
+    // The server may become idle between cancellation and rewind. Hold queued
+    // prompts during the whole dialog so none start a new run in that gap.
+    if (rewindPendingRef.current) return;
+    rewindPendingRef.current = true;
+    setRewindPending(true);
+    try {
+      await runChatRewind({
+        status,
+        rewindBeforeTimestamp,
+        promptText,
+        confirm,
+        stopAgent: stopActiveRun,
+        rewind,
+        clearQueuedPrompts: queue.clearQueuedPrompts,
+        restorePrompt: setText,
+        refreshMeta,
+        onComplete: () => {
+          scroll.unlockAutoScroll();
+          setTimeout(() => {
+            scroll.jumpToBottom();
+            focusInput();
+          }, 0);
+        },
+      });
+    } finally {
+      rewindPendingRef.current = false;
+      setRewindPending(false);
+    }
   }
 
   function handlePaste(event: ClipboardEvent) {

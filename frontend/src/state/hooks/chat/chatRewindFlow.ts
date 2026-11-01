@@ -3,10 +3,11 @@ import type { ConfirmFn } from "../../context/ConfirmContext";
 
 interface ChatRewindFlowOptions {
   status: ChatStatus;
-  beforeT: number;
+  rewindBeforeTimestamp: number;
   promptText: string;
   confirm: ConfirmFn;
-  rewind: (beforeT: number) => Promise<unknown>;
+  stopAgent: () => Promise<void>;
+  rewind: (rewindBeforeTimestamp: number) => Promise<unknown>;
   clearQueuedPrompts: () => void;
   restorePrompt: (text: string) => void;
   refreshMeta: (throwOnError?: boolean) => Promise<void>;
@@ -16,35 +17,32 @@ interface ChatRewindFlowOptions {
 /** Keep all rewind feedback in the app's dialog, not browser-native alerts. */
 export async function runChatRewind({
   status,
-  beforeT,
+  rewindBeforeTimestamp,
   promptText,
   confirm,
+  stopAgent,
   rewind,
   clearQueuedPrompts,
   restorePrompt,
   refreshMeta,
   onComplete,
 }: ChatRewindFlowOptions): Promise<void> {
-  if (status === "streaming") {
-    await confirm({
-      title: "Rewind unavailable",
-      description: "An agent run is in progress.",
-      message: "Cancel the current run before rewinding this chat.",
-      confirmLabel: "Got it",
-      cancelLabel: "Close",
-      tone: "neutral",
-    });
-    return;
-  }
+  const hasActiveRun = status === "streaming";
 
   const confirmed = await confirm({
     title: "Rewind chat",
     description: "This action cannot be undone.",
-    message: "Every message from this prompt forward is removed, and the prompt is put back in the composer.",
-    confirmLabel: "Rewind",
-    pendingLabel: "Rewinding…",
-    // ConfirmDialog shows a pending indicator and keeps API errors inline for retry.
-    action: () => rewind(beforeT),
+    message: hasActiveRun
+      ? "The current agent run will be stopped, then every message from this prompt forward will be removed. The prompt will be restored to the composer."
+      : "Every message from this prompt forward is removed, and the prompt is put back in the composer.",
+    confirmLabel: hasActiveRun ? "Stop and rewind" : "Rewind",
+    pendingLabel: hasActiveRun ? "Stopping and rewinding…" : "Rewinding…",
+    // Cancel only requests a stop. Wait for the backend run lock to clear
+    // before rewinding; failures remain inline and retryable in ConfirmDialog.
+    action: async () => {
+      if (hasActiveRun) await stopAgent();
+      await rewind(rewindBeforeTimestamp);
+    },
   });
   if (!confirmed) return;
 

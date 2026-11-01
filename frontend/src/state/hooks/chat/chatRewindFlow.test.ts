@@ -15,10 +15,11 @@ function setup(status: ChatStatus = "ready") {
   };
   const options = {
     status,
-    beforeT: 123,
+    rewindBeforeTimestamp: 123,
     promptText: "original prompt",
     confirm,
-    rewind: async (t: number) => { events.push(`rewind: ${t}`); },
+    stopAgent: async () => { events.push("stop agent"); },
+    rewind: async (timestamp: number) => { events.push(`rewind: ${timestamp}`); },
     clearQueuedPrompts: () => { events.push("clear queue"); },
     restorePrompt: (text: string) => { events.push(`draft: ${text}`); },
     refreshMeta: async () => { events.push("refresh metadata"); },
@@ -27,12 +28,73 @@ function setup(status: ChatStatus = "ready") {
   return { events, dialogs, options };
 }
 
-test("shows a styled informational dialog without rewinding during an active run", async () => {
+test("stops the running agent before rewinding after confirmation", async () => {
   const { events, dialogs, options } = setup("streaming");
   await runChatRewind(options);
-  assert.deepEqual(events, ["dialog: Rewind unavailable"]);
-  assert.equal(dialogs[0].tone, "neutral");
-  assert.match(String(dialogs[0].message), /Cancel the current run/);
+  assert.equal(dialogs[0].confirmLabel, "Stop and rewind");
+  assert.equal(dialogs[0].pendingLabel, "Stopping and rewinding…");
+  assert.match(String(dialogs[0].message), /agent run will be stopped/);
+  assert.deepEqual(events, [
+    "dialog: Rewind chat", "stop agent", "rewind: 123", "clear queue",
+    "draft: original prompt", "refresh metadata", "focus composer",
+  ]);
+});
+
+test("canceling rewind while streaming never cancels the agent", async () => {
+  const { events, options } = setup("streaming");
+  options.confirm = async () => false;
+  await runChatRewind(options);
+  assert.deepEqual(events, []);
+});
+
+test("a failure to stop the agent keeps history, drafts and queued prompts untouched", async () => {
+  const { events, options } = setup("streaming");
+  options.stopAgent = async () => {
+    events.push("stop failed");
+    throw new Error("connection unavailable");
+  };
+  options.confirm = async (dialog) => {
+    await assert.rejects(dialog.action!(), /connection unavailable/);
+    return false;
+  };
+  await runChatRewind(options);
+  assert.deepEqual(events, ["stop failed"]);
+});
+
+test("a rewind failure after stopping the agent does not mutate local state", async () => {
+  const { events, options } = setup("streaming");
+  options.rewind = async () => {
+    events.push("rewind failed");
+    throw new Error("conflict");
+  };
+  options.confirm = async (dialog) => {
+    await assert.rejects(dialog.action!(), /conflict/);
+    return false;
+  };
+  await runChatRewind(options);
+  assert.deepEqual(events, ["stop agent", "rewind failed"]);
+});
+
+test("a failed rewind can be retried safely after an active run was stopped", async () => {
+  const { events, options } = setup("streaming");
+  let attempts = 0;
+  options.rewind = async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("temporary conflict");
+    events.push("rewind succeeded");
+  };
+  options.confirm = async (dialog) => {
+    await assert.rejects(dialog.action!(), /temporary conflict/);
+    assert.deepEqual(events, ["stop agent"]);
+    await dialog.action!();
+    return true;
+  };
+  await runChatRewind(options);
+  assert.equal(attempts, 2);
+  assert.deepEqual(events, [
+    "stop agent", "stop agent", "rewind succeeded",
+    "clear queue", "draft: original prompt", "refresh metadata", "focus composer",
+  ]);
 });
 
 test("canceling the confirmation leaves the draft, queue, and history untouched", async () => {
